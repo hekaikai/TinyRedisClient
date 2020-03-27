@@ -51,7 +51,8 @@ namespace TRC
 		}
 
 		//读取数据直到读取到特定长度的尾
-		bool ReadTo(const unsigned char* tail, int nLen, const std::function<void(const unsigned char* data, int nLen)>& cb);
+		bool ReadTo(const unsigned char* tail, int nLen, 
+			const std::function<void(const unsigned char* data, int nLen,bool bLastPart)>& cb);
 	};
 
 	enum class RESPCommand :char
@@ -63,6 +64,26 @@ namespace TRC
 		eBulkString = '$',
 		eArray = '*',
 	};
+	
+	//RESP (REdis Serialization Protocol)解析器
+	class RESPParser
+	{
+		bool ParseLine(TinySocketClient* client);
+		bool ParseFixLength(TinySocketClient* client);
+		bool ParseArray(TinySocketClient* client);
+	protected:
+		RESPParser() {}
+		virtual bool OnBegin(RESPCommand cmd) = 0;
+		virtual bool OnFinish(RESPCommand cmd) = 0;
+		virtual unsigned char* OnFixLengthContent(int nLen) = 0;
+		virtual bool OnContentPart(const unsigned char* data, int nPartLen, bool bLastPart) = 0;
+
+	public:
+		virtual ~RESPParser() {}
+		
+		bool Parse(TinySocketClient* client);
+	};
+
 	class Reply
 	{
 	public:
@@ -72,6 +93,7 @@ namespace TRC
 		std::vector< Reply>	Children;
 
 	public:
+		Reply(RESPCommand eType = RESPCommand::eEmpty);
 		Reply(TinySocketClient* socket);
 		Reply(const Reply& r);
 		Reply(Reply&& r);
@@ -103,8 +125,7 @@ namespace TRC
 
 		bool Exists(const unsigned char* key, int nKeyLen);
 		bool Exists(const char* key);
-
-
 	};
+
 
 }

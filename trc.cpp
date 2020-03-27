@@ -1,6 +1,7 @@
 #include "trc.h"
 #include <vector>
 #include <thread>
+#include <stack>
 using namespace TRC;
 
 //http://c.biancheng.net/socket/
@@ -131,7 +132,8 @@ struct TempBuffer
     }
 };
 //读取数据直到读取到特定长度的尾
-bool TinySocketClient::ReadTo(const unsigned char* tail, int nLen, const std::function<void(const unsigned char* data, int nLen)>& cb)
+bool TinySocketClient::ReadTo(const unsigned char* tail, int nLen, 
+    const std::function<void(const unsigned char* data, int nLen, bool bLastPart)>& cb)
 {
     TempBuffer<> tempBuff;
 
@@ -153,12 +155,12 @@ bool TinySocketClient::ReadTo(const unsigned char* tail, int nLen, const std::fu
         }
         if (tempBuff.IsFull())
         {
-            cb(tempBuff.Buffer, tempBuff.Offset);
+            cb(tempBuff.Buffer, tempBuff.Offset,nLen ==0);
             tempBuff.Offset = 0;
         }
     }
     if(tempBuff.Offset >0)
-        cb(tempBuff.Buffer, tempBuff.Offset);
+        cb(tempBuff.Buffer, tempBuff.Offset, nLen == 0);
     return true;
 }
 bool TinySocketClient::Readable()const
@@ -181,29 +183,29 @@ bool TinySocketClient::Read(unsigned char* buffer, int nLen)
 } 
 
 
-bool ReadLine(TinySocketClient* socket, Reply& reply)
+bool ReadLine(TinySocketClient* socket, std::string& content)
 {
-    if (!socket->ReadTo((const unsigned char*)g_strCRLF, 2, [&](const unsigned char* data, int nLen) {
-        reply.Content.insert(reply.Content.end(), data, data + nLen);
+    if (!socket->ReadTo((const unsigned char*)g_strCRLF, 2, [&](const unsigned char* data, int nLen, bool bLastPart) {
+        content.insert(content.end(), data, data + nLen);
         }))
     {
         return false;
     }
 
-    if (reply.Content.empty())
+    if (content.empty())
         return false;
 
-    //将最后的\r\n删除掉
-    reply.Content.pop_back();
-    reply.Content.pop_back();
+        //将最后的\r\n删除掉
+    content.pop_back();
+    content.pop_back();
     return true;
 }
 bool ReadFixLength(TinySocketClient* socket, Reply& reply)
 {
     //首先读一行获取长度
-    if (!ReadLine(socket, reply))
+    if (!ReadLine(socket, reply.Content))
         return false;
-    
+
     //转换字符串的长度为整数
     long long nLen = reply.Integer();
     reply.Content.resize(nLen);
@@ -212,7 +214,7 @@ bool ReadFixLength(TinySocketClient* socket, Reply& reply)
 bool ReadArray(TinySocketClient* socket, Reply& reply)
 {
     //首先读一行获取长度
-    if (!ReadLine(socket, reply))
+    if (!ReadLine(socket, reply.Content))
         return false;
 
     //转换字符串的长度为整数
@@ -232,17 +234,134 @@ bool ReadArray(TinySocketClient* socket, Reply& reply)
     return true;
 }
 
+bool RESPParser::ParseLine(TinySocketClient* socket)
+{
+    return socket->ReadTo((const unsigned char*)g_strCRLF, 2, [&](const unsigned char* data, int nLen, bool bLast) {
+        //如果是最后一块数据则剔除末尾的\r\n
+        if (bLast)
+            nLen -= 2;
+        OnContentPart(data, nLen, bLast);
+        });
+}
 
+bool RESPParser::ParseFixLength(TinySocketClient* socket)
+{
+    Reply reply;
+    reply.Type = RESPCommand::eInteger;
+    //首先读一行获取长度
+    if (!ReadLine(socket, reply.Content))
+        return false;
+
+    //转换字符串的长度为整数
+    long long nLen = reply.Integer();
+    
+    auto pointer = OnFixLengthContent(nLen);
+    if (!pointer)
+        return false;
+    if (!socket->Read(pointer, nLen))
+        return false;
+
+    //将\r\n读取出来
+    reply.Content.resize(2);
+    return socket->Read((unsigned char*)reply.Content.data(), 2);
+}
+bool RESPParser::ParseArray(TinySocketClient* socket)
+{
+    Reply reply;
+    reply.Type = RESPCommand::eInteger;
+    //首先读一行获取长度
+    if (!ReadLine(socket, reply.Content))
+        return false;
+
+    //转换字符串的长度为整数
+    long long nLen = reply.Integer();
+    reply.Children.reserve(nLen);
+    if (reply.Children.capacity() < nLen)
+        return false;
+
+    for (int i = 0; i < nLen; i++)
+    {
+        if (!Parse(socket))
+            return false;
+    }
+    return true;
+}
+bool RESPParser::Parse(TinySocketClient* socket)
+{
+    RESPCommand cmd = socket->ReadT<RESPCommand>();
+    OnBegin(cmd);
+    bool bOk = false;
+    if (cmd == RESPCommand::eError)
+        bOk = ParseLine(socket);
+    else if (cmd == RESPCommand::eSimpleString)
+        bOk = ParseLine(socket);
+    else if (cmd == RESPCommand::eInteger)
+        bOk = ParseLine(socket);
+    else if (cmd == RESPCommand::eBulkString)
+        bOk = ParseFixLength(socket);
+    else if (cmd == RESPCommand::eArray)
+        bOk = ParseArray(socket);
+    if (bOk)
+        OnFinish(cmd);
+    return bOk;
+}
+class ReplyParse :public Reply, RESPParser
+{
+    virtual bool OnBegin(RESPCommand cmd)
+    {
+        if (m_Recent.empty())
+        {
+            Type = cmd;
+            m_Recent.push(this);
+            return true;
+        }
+        
+        m_Recent.top()->Children.emplace_back(cmd);
+        auto &last = m_Recent.top()->Children.back();
+        m_Recent.push(&last);
+        return true;
+    }
+    virtual bool OnFinish(RESPCommand cmd)
+    {
+        m_Recent.pop();
+    }
+    virtual unsigned char* OnFixLengthContent(int nLen)
+    {
+        auto top = m_Recent.top();
+        top->Content.resize(nLen);
+        if (top->Content.size() != nLen)
+            return NULL;
+
+        return (unsigned char* )top->Content.data();
+    }
+    virtual bool OnContentPart(const unsigned char* data, int nPartLen, bool bLastPart)
+    {
+        auto top = m_Recent.top();
+        top->Content.insert(top->Content.end(), data, data + nPartLen);
+        return true;
+    }
+    std::stack<Reply*> m_Recent;
+public:
+    ReplyParse(TinySocketClient* socket)
+    {
+        Parse(socket);
+    }
+
+};
+Reply::Reply(RESPCommand eType )
+{
+    Type = eType;
+}
 Reply::Reply(TinySocketClient* socket)
 {
     Type = socket->ReadT<RESPCommand>();
     bool bOk = false;
     if (Type == RESPCommand::eError)
-        bOk = ReadLine(socket, *this);
+        bOk = ReadLine(socket, Content);
     else if (Type == RESPCommand::eSimpleString)
-        bOk = ReadLine(socket, *this);
+        bOk = ReadLine(socket, Content);
     else if (Type == RESPCommand::eInteger)
-        bOk = ReadLine(socket, *this);
+        bOk = ReadLine(socket, Content);
     else if (Type == RESPCommand::eBulkString)
         bOk = ReadFixLength(socket, *this);
     else if (Type == RESPCommand::eArray)
