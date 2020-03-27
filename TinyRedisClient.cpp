@@ -2,9 +2,34 @@
 //
 
 #include <iostream>
-
+#include "trc.h"
 int main()
 {
+	WORD version = MAKEWORD(2, 2);
+	WSADATA data;
+
+	int nRet = WSAStartup(version, &data);
+
+	TRC::TinyRedisClient client("127.0.0.1", 6379);
+	client.Connect();
+	if (client.Set("hello", "world"))
+	{
+		std::cout << "ok!\n";
+	}
+	if (client.Exists("hello"))
+	{
+		std::cout << "ok!\n";
+	}
+
+	if (client.Erase("hello"))
+	{
+		std::cout << "ok!\n";
+	}
+	if (client.Exists("hello"))
+	{
+		std::cout << "ok!\n";
+	}
+
     std::cout << "Hello World!\n";
 }
 

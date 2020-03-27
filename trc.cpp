@@ -2,6 +2,10 @@
 #include <vector>
 #include <thread>
 #include <stack>
+#ifdef _WIN32
+#define  strcasecmp _stricmp
+#endif
+
 using namespace TRC;
 
 //http://c.biancheng.net/socket/
@@ -132,8 +136,8 @@ struct TempBuffer
     }
 };
 //读取数据直到读取到特定长度的尾
-bool TinySocketClient::ReadTo(const unsigned char* tail, int nLen, 
-    const std::function<void(const unsigned char* data, int nLen, bool bLastPart)>& cb)
+bool TinySocketClient::ReadUntil(const unsigned char* tail, int nLen,
+    const std::function<void(const unsigned char* data, int nLen, bool bEndPart)>& cb)
 {
     TempBuffer<> tempBuff;
 
@@ -155,12 +159,12 @@ bool TinySocketClient::ReadTo(const unsigned char* tail, int nLen,
         }
         if (tempBuff.IsFull())
         {
-            cb(tempBuff.Buffer, tempBuff.Offset,nLen ==0);
+            cb(tempBuff.Buffer, tempBuff.Offset, nLeft ==0);
             tempBuff.Offset = 0;
         }
     }
     if(tempBuff.Offset >0)
-        cb(tempBuff.Buffer, tempBuff.Offset, nLen == 0);
+        cb(tempBuff.Buffer, tempBuff.Offset, nLeft == 0);
     return true;
 }
 bool TinySocketClient::Readable()const
@@ -183,60 +187,25 @@ bool TinySocketClient::Read(unsigned char* buffer, int nLen)
 } 
 
 
-bool ReadLine(TinySocketClient* socket, std::string& content)
+long long RESPParser::ParseInteger(TinySocketClient* socket)
 {
-    if (!socket->ReadTo((const unsigned char*)g_strCRLF, 2, [&](const unsigned char* data, int nLen, bool bLastPart) {
-        content.insert(content.end(), data, data + nLen);
+    std::string strContent;
+    if (!socket->ReadUntil((const unsigned char*)g_strCRLF, 2, [&](const unsigned char* data, int nLen, bool bEndPart) {
+        if (bEndPart)
+            nLen++;
+        strContent.insert(strContent.end(), data, data + nLen);
         }))
     {
-        return false;
+        return 0;
     }
-
-    if (content.empty())
-        return false;
-
-        //将最后的\r\n删除掉
-    content.pop_back();
-    content.pop_back();
-    return true;
-}
-bool ReadFixLength(TinySocketClient* socket, Reply& reply)
-{
-    //首先读一行获取长度
-    if (!ReadLine(socket, reply.Content))
-        return false;
-
-    //转换字符串的长度为整数
-    long long nLen = reply.Integer();
-    reply.Content.resize(nLen);
-    return socket->Read((unsigned char*)reply.Content.data(), nLen);
-}
-bool ReadArray(TinySocketClient* socket, Reply& reply)
-{
-    //首先读一行获取长度
-    if (!ReadLine(socket, reply.Content))
-        return false;
-
-    //转换字符串的长度为整数
-    long long nLen = reply.Integer();
-    reply.Children.reserve(nLen);
-    if (reply.Children.capacity() < nLen)
-        return false;
-
-    for (int i = 0; i < nLen; i++)
-    {
-        //構造的時候讀取
-        reply.Children.emplace_back(socket);
-        //檢查讀取是否正確，不正確則放棄。
-        if (!reply.Children.back())
-            return false;
-    }
-    return true;
+        if (strContent.empty())
+            return 0;
+    return std::stoll(strContent);
 }
 
 bool RESPParser::ParseLine(TinySocketClient* socket)
 {
-    return socket->ReadTo((const unsigned char*)g_strCRLF, 2, [&](const unsigned char* data, int nLen, bool bLast) {
+    return socket->ReadUntil((const unsigned char*)g_strCRLF, 2, [&](const unsigned char* data, int nLen, bool bLast) {
         //如果是最后一块数据则剔除末尾的\r\n
         if (bLast)
             nLen -= 2;
@@ -246,39 +215,26 @@ bool RESPParser::ParseLine(TinySocketClient* socket)
 
 bool RESPParser::ParseFixLength(TinySocketClient* socket)
 {
-    Reply reply;
-    reply.Type = RESPCommand::eInteger;
-    //首先读一行获取长度
-    if (!ReadLine(socket, reply.Content))
-        return false;
-
     //转换字符串的长度为整数
-    long long nLen = reply.Integer();
+    long long nLen = ParseInteger(socket);
     
+    //获取固定长度内容的指针
     auto pointer = OnFixLengthContent(nLen);
     if (!pointer)
         return false;
+
     if (!socket->Read(pointer, nLen))
         return false;
 
-    //将\r\n读取出来
-    reply.Content.resize(2);
-    return socket->Read((unsigned char*)reply.Content.data(), 2);
+    //将\r\n分割符读取后丢弃
+    unsigned char buff[2];
+    return socket->Read(buff, 2);
 }
 bool RESPParser::ParseArray(TinySocketClient* socket)
-{
-    Reply reply;
-    reply.Type = RESPCommand::eInteger;
-    //首先读一行获取长度
-    if (!ReadLine(socket, reply.Content))
-        return false;
-
-    //转换字符串的长度为整数
-    long long nLen = reply.Integer();
-    reply.Children.reserve(nLen);
-    if (reply.Children.capacity() < nLen)
-        return false;
-
+{ 
+//转换字符串的长度为整数
+    long long nLen = ParseInteger(socket);
+    OnBegin(RESPCommand::eArray, nLen);
     for (int i = 0; i < nLen; i++)
     {
         if (!Parse(socket))
@@ -289,41 +245,54 @@ bool RESPParser::ParseArray(TinySocketClient* socket)
 bool RESPParser::Parse(TinySocketClient* socket)
 {
     RESPCommand cmd = socket->ReadT<RESPCommand>();
-    OnBegin(cmd);
     bool bOk = false;
-    if (cmd == RESPCommand::eError)
-        bOk = ParseLine(socket);
-    else if (cmd == RESPCommand::eSimpleString)
-        bOk = ParseLine(socket);
-    else if (cmd == RESPCommand::eInteger)
-        bOk = ParseLine(socket);
-    else if (cmd == RESPCommand::eBulkString)
-        bOk = ParseFixLength(socket);
-    else if (cmd == RESPCommand::eArray)
+
+    //对于数组而言只有在解析了数组的数量之后才调用OnBegin，这样便于预先准备好存储空间。
+    if (cmd == RESPCommand::eArray)
         bOk = ParseArray(socket);
+    else
+    {
+        OnBegin(cmd);
+        if (cmd == RESPCommand::eError)
+            bOk = ParseLine(socket);
+        else if (cmd == RESPCommand::eSimpleString)
+            bOk = ParseLine(socket);
+        else if (cmd == RESPCommand::eInteger)
+            bOk = ParseLine(socket);
+        else if (cmd == RESPCommand::eBulkString)
+            bOk = ParseFixLength(socket);
+    }
     if (bOk)
         OnFinish(cmd);
     return bOk;
 }
 class ReplyParse :public Reply, RESPParser
 {
-    virtual bool OnBegin(RESPCommand cmd)
+    virtual bool OnBegin(RESPCommand cmd, int nArrayLen)
     {
         if (m_Recent.empty())
         {
+            if (cmd == RESPCommand::eArray && nArrayLen > 0)
+                Children.reserve(nArrayLen);
             Type = cmd;
             m_Recent.push(this);
             return true;
         }
-        
-        m_Recent.top()->Children.emplace_back(cmd);
+        auto top = m_Recent.top();
+        top->Children.emplace_back(cmd);
         auto &last = m_Recent.top()->Children.back();
+        if (cmd == RESPCommand::eArray && nArrayLen > 0)
+            last.Children.reserve(nArrayLen);
+
         m_Recent.push(&last);
         return true;
     }
     virtual bool OnFinish(RESPCommand cmd)
     {
+        if (m_Recent.empty())
+            return false;
         m_Recent.pop();
+        return true;
     }
     virtual unsigned char* OnFixLengthContent(int nLen)
     {
@@ -351,25 +320,7 @@ public:
 Reply::Reply(RESPCommand eType )
 {
     Type = eType;
-}
-Reply::Reply(TinySocketClient* socket)
-{
-    Type = socket->ReadT<RESPCommand>();
-    bool bOk = false;
-    if (Type == RESPCommand::eError)
-        bOk = ReadLine(socket, Content);
-    else if (Type == RESPCommand::eSimpleString)
-        bOk = ReadLine(socket, Content);
-    else if (Type == RESPCommand::eInteger)
-        bOk = ReadLine(socket, Content);
-    else if (Type == RESPCommand::eBulkString)
-        bOk = ReadFixLength(socket, *this);
-    else if (Type == RESPCommand::eArray)
-        bOk = ReadArray(socket, *this);
-
-    if (!bOk)
-        Type = RESPCommand::eEmpty;
-}
+} 
 Reply::Reply(const Reply& r)
 {
     operator=(r);
@@ -388,7 +339,7 @@ long long Reply::Integer(bool bForce )const
         return 0;
     if (Content.empty())
         return 0;
-    return _atoi64(Content.data());
+    return std::stoll(Content);
 }
 Reply::operator bool()const
 {
@@ -496,11 +447,12 @@ bool TinyRedisClient::Set(const unsigned char* key, int nKeyLen, const unsigned 
     if (!SendBulkString(value, nValueLen)) return false;
 
     //获取结果
-    Reply ret(this);
+    ReplyParse ret(this);
     if (!ret)
         return false;
+    
     if (ret.Type == RESPCommand::eSimpleString)
-        return _stricmp(ret.Content.c_str(), "OK") == 0;
+        return strcasecmp(ret.Content.c_str(), "OK") == 0;
     return false;
 }
 bool TinyRedisClient::Erase(const char* key)
@@ -515,7 +467,7 @@ bool TinyRedisClient::Erase(const unsigned char* key, int nKeyLen)
     if (!SendBulkString(key, nKeyLen)) return false;
 
     //获取结果
-    Reply ret(this);
+    ReplyParse ret(this);
     if (!ret)
         return false;
     if (ret.IsInteger())
@@ -530,7 +482,7 @@ bool TinyRedisClient::Exists(const unsigned char* key, int nKeyLen)
     if (!SendBulkString(key, nKeyLen)) return false;
 
     //获取结果
-    Reply ret(this);
+    ReplyParse ret(this);
     if (!ret)
         return false;
     if (ret.IsInteger())

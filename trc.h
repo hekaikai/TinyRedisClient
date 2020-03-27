@@ -51,8 +51,8 @@ namespace TRC
 		}
 
 		//读取数据直到读取到特定长度的尾
-		bool ReadTo(const unsigned char* tail, int nLen, 
-			const std::function<void(const unsigned char* data, int nLen,bool bLastPart)>& cb);
+		bool ReadUntil(const unsigned char* tail, int nLen,
+			const std::function<void(const unsigned char* data, int nLen,bool bEndPart)>& cb);
 	};
 
 	enum class RESPCommand :char
@@ -68,15 +68,16 @@ namespace TRC
 	//RESP (REdis Serialization Protocol)解析器
 	class RESPParser
 	{
+		long long ParseInteger(TinySocketClient* socket);
 		bool ParseLine(TinySocketClient* client);
 		bool ParseFixLength(TinySocketClient* client);
 		bool ParseArray(TinySocketClient* client);
 	protected:
 		RESPParser() {}
-		virtual bool OnBegin(RESPCommand cmd) = 0;
+		virtual bool OnBegin(RESPCommand cmd,int nArrayLen = 0) = 0;
 		virtual bool OnFinish(RESPCommand cmd) = 0;
 		virtual unsigned char* OnFixLengthContent(int nLen) = 0;
-		virtual bool OnContentPart(const unsigned char* data, int nPartLen, bool bLastPart) = 0;
+		virtual bool OnContentPart(const unsigned char* data, int nPartLen, bool bEndPart) = 0;
 
 	public:
 		virtual ~RESPParser() {}
@@ -94,7 +95,6 @@ namespace TRC
 
 	public:
 		Reply(RESPCommand eType = RESPCommand::eEmpty);
-		Reply(TinySocketClient* socket);
 		Reply(const Reply& r);
 		Reply(Reply&& r);
 		operator bool()const;
