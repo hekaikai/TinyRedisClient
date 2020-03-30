@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <stack>
 #include <functional>
 #ifdef _WIN32
 #include <winsock2.h>
@@ -54,7 +55,6 @@ namespace TRC
 		bool ReadUntil(const unsigned char* tail, int nLen,
 			const std::function<void(const unsigned char* data, int nLen,bool bEndPart)>& cb);
 	};
-
 	enum class RESPCommand :char
 	{
 		eEmpty = 0,
@@ -64,7 +64,18 @@ namespace TRC
 		eBulkString = '$',
 		eArray = '*',
 	};
-	
+	class RESPSocketClient:public TinySocketClient
+	{
+	public:
+		RESPSocketClient(const char* addres, int port);
+		bool SendError(const char* error, int nLen = -1);
+		bool SendSimpleString(const char* str, int nLen = -1);
+		bool SendInteger(long long nInt, RESPCommand cmd = RESPCommand::eInteger);
+		bool SendBulkString(const unsigned char* data, int nLen);
+		bool SendBulkString(const  char* data, int nLen);
+		bool SendArray(int nCount);
+		bool SendLine(RESPCommand cmd, const unsigned char* data, int nLen);
+	};
 	//RESP (REdis Serialization Protocol)解析器
 	class RESPParser
 	{
@@ -82,9 +93,8 @@ namespace TRC
 	public:
 		virtual ~RESPParser() {}
 		
-		bool Parse(TinySocketClient* client);
+		virtual bool Parse(TinySocketClient* client);
 	};
-
 	class Reply
 	{
 	public:
@@ -103,29 +113,56 @@ namespace TRC
 		Reply& operator = (const Reply& r);
 		Reply& operator = (Reply&& r);
 		Reply& Swap(Reply& r);
-	};
-	class TinyRedisClient :public TinySocketClient
-	{
-		bool SendError(const char* error, int nLen = -1);
-		bool SendSimpleString(const char* str, int nLen = -1);
-		bool SendInteger(long long nInt, RESPCommand cmd = RESPCommand::eInteger);
-		bool SendBulkString(const unsigned char* data, int nLen);
-		bool SendBulkString(const  char* data, int nLen);
-		bool SendArray(int nCount);
-		bool SendLine(RESPCommand cmd, const unsigned char* data, int nLen);
+		void Reset();
 
+	};
+	class ReplyParser :public Reply, public RESPParser
+	{
+		virtual bool OnBegin(RESPCommand cmd, int nArrayLen);
+		virtual bool OnFinish(RESPCommand cmd);
+		virtual unsigned char* OnFixLengthContent(int nLen);
+		virtual bool OnContentPart(const unsigned char* data, int nPartLen, bool bLastPart);
+		std::stack<Reply*> m_Recent;
+	public:
+		ReplyParser();
+		ReplyParser(TinySocketClient* socket);
+	};
+
+	class ScanCursor:public ReplyParser
+	{
+	public:
+		ScanCursor();
+		//游标值
+		int Cursor()const;
+		//是否为最后一个游标
+		bool IsFinished()const;
+
+		//游标中Key的数量
+		int Count()const;
+
+		//根据索引获取Key的值
+		const Reply* Key(int n)const;
+	};
+
+	class TinyRedisClient :public RESPSocketClient
+	{
 	public:
 		TinyRedisClient(const char* addres, int port);
 		~TinyRedisClient();
-
+		//http://redisdoc.com/string/set.html
 		bool Set(const char* key, const char* value);
 		bool Set(const unsigned char* key, int nKeyLen, const unsigned char* value, int nValueLen);
-		bool Erase(const unsigned char* key, int nKeyLen);
-		bool Erase(const char* key);
-
+		//http://redisdoc.com/database/del.html
+		bool Del(const unsigned char* key, int nKeyLen);
+		bool Del(const char* key);
+		//http://redisdoc.com/database/exists.html
 		bool Exists(const unsigned char* key, int nKeyLen);
 		bool Exists(const char* key);
+		//http://redisdoc.com/string/get.html
+		bool Get(const char* key, RESPParser* result);
+		bool Get(const unsigned char* key,int nKeyLen, RESPParser* result);
+		//http://redisdoc.com/database/scan.html
+		bool Scan(int cursor, RESPParser* result, const char* pattern = NULL, int nCount  = -1);
+		bool Scan(int cursor, RESPParser* result, const unsigned char* pattern = NULL,int nPatternLen =-1, int nCount = -1);
 	};
-
-
 }

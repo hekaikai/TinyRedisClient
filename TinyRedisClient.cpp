@@ -3,6 +3,7 @@
 
 #include <iostream>
 #include "trc.h"
+#include <algorithm>
 int main()
 {
 	WORD version = MAKEWORD(2, 2);
@@ -20,8 +21,15 @@ int main()
 	{
 		std::cout << "ok!\n";
 	}
+	{
+		TRC::ReplyParser replyParser;
+		if (client.Get("hello", &replyParser))
+		{
+			std::cout << "ok!\n" << replyParser.Content << std::endl;;
+		}
+	}
 
-	if (client.Erase("hello"))
+	if (client.Del("hello"))
 	{
 		std::cout << "ok!\n";
 	}
@@ -29,7 +37,44 @@ int main()
 	{
 		std::cout << "ok!\n";
 	}
+	{
+		TRC::ReplyParser replyParser;
+		if (client.Get("hello", &replyParser))
+		{
+			std::cout << "ok!\n" << replyParser.Content << std::endl;;
+		}
+	}
+	for (int i = 0; i < 1000; i++)
+	{
+		std::string strKey = "a";
+		strKey += std::to_string(i);
+		std::string strVal = std::to_string(i);
+		client.Set(strKey.c_str(), strVal.c_str());
+	}
+	{
+		TRC::ScanCursor replyCursor;
+		int n = 0;
+		std::vector<std::string> vec;
+		int nNextCursor = 0;
+		do
+		{
+			replyCursor.Reset();
+			if (client.Scan(nNextCursor, &replyCursor, "a*", 100))
+			{
+				n += replyCursor.Count();
+				for (int i = 0; i < replyCursor.Count(); i++)
+				{
+					auto reply =  replyCursor.Key(i);
+					vec.push_back(reply->Content);
+				}
+				std::cout << "ok!" << replyCursor.Count()<< std::endl;;
+			}
+			nNextCursor = replyCursor.Cursor();
+		} while (!replyCursor.IsFinished());
 
+		std::sort(vec.begin(), vec.end());
+		std::cout << "total " << vec.size() << std::endl;
+	}
     std::cout << "Hello World!\n";
 }
 

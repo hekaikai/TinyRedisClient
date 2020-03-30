@@ -187,6 +187,74 @@ bool TinySocketClient::Read(unsigned char* buffer, int nLen)
 } 
 
 
+RESPSocketClient::RESPSocketClient(const char* addres, int port) :TinySocketClient(addres, port)
+{
+
+}
+bool RESPSocketClient::SendLine(RESPCommand cmd, const unsigned char* data, int nLen)
+{
+    if (Send((const unsigned char*)&cmd, 1) != 1)
+        return false;
+    if (nLen > 0)
+    {
+        if (Send(data, nLen) != nLen)
+            return false;
+    }
+
+    return  Send((const unsigned char*)g_strCRLF, 2) == 2;
+}
+bool RESPSocketClient::SendError(const char* error, int nLen)
+{
+    if (nLen < 0)
+    {
+        nLen = 0;
+        if (error)
+            nLen = strlen(error);
+    }
+    return SendLine(RESPCommand::eError, (const unsigned char*)error, nLen);
+}
+bool RESPSocketClient::SendSimpleString(const char* str, int nLen)
+{
+    if (nLen < 0)
+    {
+        nLen = 0;
+        if (str)
+            nLen = strlen(str);
+    }
+    return SendLine(RESPCommand::eSimpleString, (const unsigned char*)str, nLen);
+}
+bool RESPSocketClient::SendInteger(long long nInt, RESPCommand cmd)
+{
+    std::string str = std::to_string(nInt);
+    return SendLine(cmd, (const unsigned char*)str.data(), str.size());
+}
+bool RESPSocketClient::SendBulkString(const  char* data, int nLen)
+{
+    if (nLen < 0)
+    {
+        nLen = 0;
+        if (data)
+            nLen = strlen(data);
+    }
+    return SendBulkString((const unsigned char*)data, nLen);
+}
+bool RESPSocketClient::SendBulkString(const unsigned char* data, int nLen)
+{
+    if (!SendInteger(nLen, RESPCommand::eBulkString))
+        return false;
+    if (nLen > 0)
+    {
+        if (Send(data, nLen) <= 0)
+            return false;
+    }
+    return  Send((const unsigned char*)g_strCRLF, 2) == 2;
+}
+bool RESPSocketClient::SendArray(int nCount)
+{
+    return SendInteger(nCount, RESPCommand::eArray);
+}
+
+
 long long RESPParser::ParseInteger(TinySocketClient* socket)
 {
     std::string strContent;
@@ -266,57 +334,97 @@ bool RESPParser::Parse(TinySocketClient* socket)
         OnFinish(cmd);
     return bOk;
 }
-class ReplyParse :public Reply, RESPParser
+bool ReplyParser::OnBegin(RESPCommand cmd, int nArrayLen)
 {
-    virtual bool OnBegin(RESPCommand cmd, int nArrayLen)
+    if (m_Recent.empty())
     {
-        if (m_Recent.empty())
-        {
-            if (cmd == RESPCommand::eArray && nArrayLen > 0)
-                Children.reserve(nArrayLen);
-            Type = cmd;
-            m_Recent.push(this);
-            return true;
-        }
-        auto top = m_Recent.top();
-        top->Children.emplace_back(cmd);
-        auto &last = m_Recent.top()->Children.back();
         if (cmd == RESPCommand::eArray && nArrayLen > 0)
-            last.Children.reserve(nArrayLen);
+            Children.reserve(nArrayLen);
+        Type = cmd;
+        m_Recent.push(this);
+        return true;
+    }
+    auto top = m_Recent.top();
+    top->Children.emplace_back(cmd);
+    auto &last = m_Recent.top()->Children.back();
+    if (cmd == RESPCommand::eArray && nArrayLen > 0)
+        last.Children.reserve(nArrayLen);
 
-        m_Recent.push(&last);
-        return true;
-    }
-    virtual bool OnFinish(RESPCommand cmd)
+    m_Recent.push(&last);
+    return true;
+}
+bool ReplyParser::OnFinish(RESPCommand cmd)
+{
+    if (m_Recent.empty())
+        return false;
+    m_Recent.pop();
+    return true;
+}
+unsigned char* ReplyParser::OnFixLengthContent(int nLen)
+{
+    auto top = m_Recent.top();
+    if (nLen > 0)
     {
-        if (m_Recent.empty())
-            return false;
-        m_Recent.pop();
-        return true;
-    }
-    virtual unsigned char* OnFixLengthContent(int nLen)
-    {
-        auto top = m_Recent.top();
         top->Content.resize(nLen);
         if (top->Content.size() != nLen)
             return NULL;
-
-        return (unsigned char* )top->Content.data();
     }
-    virtual bool OnContentPart(const unsigned char* data, int nPartLen, bool bLastPart)
+    else
     {
-        auto top = m_Recent.top();
-        top->Content.insert(top->Content.end(), data, data + nPartLen);
-        return true;
-    }
-    std::stack<Reply*> m_Recent;
-public:
-    ReplyParse(TinySocketClient* socket)
-    {
-        Parse(socket);
+        top->Content.clear();
+        return NULL;
     }
 
-};
+    return (unsigned char* )top->Content.data();
+}
+bool ReplyParser::OnContentPart(const unsigned char* data, int nPartLen, bool bLastPart)
+{
+    auto top = m_Recent.top();
+    top->Content.insert(top->Content.end(), data, data + nPartLen);
+    return true;
+}
+ReplyParser::ReplyParser()
+{
+}
+ReplyParser::ReplyParser(TinySocketClient* socket)
+{
+    Parse(socket);
+}
+
+ScanCursor::ScanCursor()
+{
+
+}
+//游标值
+int ScanCursor::Cursor()const 
+{
+    if (Children.empty())
+        return 0;
+
+    return Children.front().Integer();
+}
+//是否为最后一个游标
+bool ScanCursor::IsFinished()const
+{
+    return Cursor() == 0;
+}
+
+//游标中Key的数量
+int ScanCursor::Count()const
+{
+    if (Children.size() < 2)
+        return 0;
+    return Children.back().Children.size();
+}
+
+//根据索引获取Key的值
+const Reply* ScanCursor::Key(int n)const
+{
+    if (n < 0 || n >= Count())
+        return NULL;
+    return &Children.back().Children.at(n);
+}
+
 Reply::Reply(RESPCommand eType )
 {
     Type = eType;
@@ -356,6 +464,10 @@ Reply& Reply::operator = (Reply&& r)
 {
     return Swap(r);
 }
+void Reply::Reset()
+{
+    Reply().Swap(*this);
+}
 Reply& Reply::Swap(Reply& r)
 {
     std::swap(Type, r.Type);
@@ -363,75 +475,13 @@ Reply& Reply::Swap(Reply& r)
     Children.swap(r.Children);
     return *this;
 }
-TinyRedisClient::TinyRedisClient(const char* addres, int port):TinySocketClient(addres,port)
+TinyRedisClient::TinyRedisClient(const char* addres, int port):RESPSocketClient(addres,port)
 {
 
 }
 TinyRedisClient::~TinyRedisClient()
 {
 
-}
-bool TinyRedisClient::SendLine(RESPCommand cmd, const unsigned char* data, int nLen)
-{
-    if (Send((const unsigned char*)&cmd, 1)!= 1)
-        return false;
-    if (nLen > 0)
-    {
-        if (Send(data, nLen) != nLen)
-            return false;
-    }
-
-    return  Send((const unsigned char*)g_strCRLF, 2) == 2;
-}
-bool TinyRedisClient::SendError(const char* error, int nLen)
-{
-    if (nLen < 0)
-    {
-        nLen = 0;
-        if (error)
-            nLen = strlen(error);
-    }
-    return SendLine(RESPCommand::eError,(const unsigned char*)error, nLen);
-}
-bool TinyRedisClient::SendSimpleString(const char* str, int nLen)
-{
-    if (nLen < 0)
-    {
-        nLen = 0;
-        if (str)
-            nLen = strlen(str);
-    }
-    return SendLine(RESPCommand::eSimpleString, (const unsigned char*)str, nLen);
-}
-bool TinyRedisClient::SendInteger(long long nInt, RESPCommand cmd)
-{
-    std::string str = std::to_string(nInt);
-    return SendLine(cmd, (const unsigned char*)str.data(), str.size());
-}
-bool TinyRedisClient::SendBulkString(const  char* data, int nLen)
-{
-    if (nLen < 0)
-    {
-        nLen = 0;
-        if (data)
-            nLen = strlen(data);
-    }
-    return SendBulkString((const unsigned char*)data, nLen);
-}
-bool TinyRedisClient::SendBulkString(const unsigned char* data, int nLen)
-{
-    if (!SendInteger(nLen, RESPCommand::eBulkString))
-        return false;
-    if (nLen > 0)
-    {
-        if (Send(data, nLen) <= 0)
-            return false;
-    }
-    return  Send((const unsigned char*)g_strCRLF, 2) == 2;
-}
-bool TinyRedisClient::SendArray(int nCount)
-{
-    return SendInteger(nCount, RESPCommand::eArray);
 }
 bool TinyRedisClient::Set(const char* key, const char* value)
 {
@@ -447,7 +497,7 @@ bool TinyRedisClient::Set(const unsigned char* key, int nKeyLen, const unsigned 
     if (!SendBulkString(value, nValueLen)) return false;
 
     //获取结果
-    ReplyParse ret(this);
+    ReplyParser ret(this);
     if (!ret)
         return false;
     
@@ -455,11 +505,11 @@ bool TinyRedisClient::Set(const unsigned char* key, int nKeyLen, const unsigned 
         return strcasecmp(ret.Content.c_str(), "OK") == 0;
     return false;
 }
-bool TinyRedisClient::Erase(const char* key)
+bool TinyRedisClient::Del(const char* key)
 {
-    return Erase((const unsigned char*)key, key ? strlen(key) : 0);
+    return Del((const unsigned char*)key, key ? strlen(key) : 0);
 }
-bool TinyRedisClient::Erase(const unsigned char* key, int nKeyLen)
+bool TinyRedisClient::Del(const unsigned char* key, int nKeyLen)
 {
     if (!SendArray(2)) return false;
 
@@ -467,7 +517,7 @@ bool TinyRedisClient::Erase(const unsigned char* key, int nKeyLen)
     if (!SendBulkString(key, nKeyLen)) return false;
 
     //获取结果
-    ReplyParse ret(this);
+    ReplyParser ret(this);
     if (!ret)
         return false;
     if (ret.IsInteger())
@@ -482,7 +532,7 @@ bool TinyRedisClient::Exists(const unsigned char* key, int nKeyLen)
     if (!SendBulkString(key, nKeyLen)) return false;
 
     //获取结果
-    ReplyParse ret(this);
+    ReplyParser ret(this);
     if (!ret)
         return false;
     if (ret.IsInteger())
@@ -493,4 +543,46 @@ bool TinyRedisClient::Exists(const char* key)
 {
     return Exists((const unsigned char*)key, key ? strlen(key) : 0);
 }
+bool TinyRedisClient::Get(const char* key, RESPParser* result)
+{
+    return Get((const unsigned char*)key, key?strlen(key):0, result);
+}
+bool TinyRedisClient::Get(const unsigned char* key, int nKeyLen, RESPParser* result)
+{
+    if (!SendArray(2)) return false;
+    if (!SendBulkString("GET", 3)) return false;
+    if (!SendBulkString(key, nKeyLen)) return false;
+    return result->Parse(this);
+}
+bool TinyRedisClient::Scan(int cursor, RESPParser* result, const char* pattern, int nCount)
+{
+    return Scan(cursor, result, (const unsigned char*)pattern, pattern ? strlen(pattern) : 0, nCount);
+}
+bool TinyRedisClient::Scan(int cursor, RESPParser* result, const unsigned char* pattern, int nPatternLen, int nCount)
+{
+    int nSendCount = 2;
+    if (pattern && nPatternLen > 0)
+        nSendCount += 2;
+    if (nCount > 0) nSendCount += 2;
+
+    if (!SendArray(nSendCount)) return false;
+    if (!SendBulkString("SCAN", 4)) return false;
+    std::string str = std::to_string(cursor);
+    if (!SendBulkString(str.data(), str.size())) return false;
+
+    if (pattern && nPatternLen > 0)
+    {
+        if (!SendBulkString("MATCH", 5)) return false;
+        if (!SendBulkString(pattern, nPatternLen)) return false;
+    }
+    if(nCount >0)
+    {
+        if (!SendBulkString("COUNT", 5)) return false;
+        str = std::to_string(nCount);
+        if (!SendBulkString(str.data(), str.size())) return false;
+    }
+    return result->Parse(this);
+}
+
+
 
