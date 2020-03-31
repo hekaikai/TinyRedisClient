@@ -70,7 +70,11 @@ namespace TRC
 		RESPSocketClient(const char* addres, int port);
 		bool SendError(const char* error, int nLen = -1);
 		bool SendSimpleString(const char* str, int nLen = -1);
+		bool SendSimpleString(const std::string& str);
+
 		bool SendInteger(long long nInt, RESPCommand cmd = RESPCommand::eInteger);
+		
+		bool SendBulkString(const std::string& data);
 		bool SendBulkString(const unsigned char* data, int nLen);
 		bool SendBulkString(const  char* data, int nLen);
 		bool SendArray(int nCount);
@@ -144,25 +148,57 @@ namespace TRC
 		const Reply* Key(int n)const;
 	};
 
+	class ScriptEval :public ReplyParser
+	{
+		RESPSocketClient* m_client;
+	public:
+		ScriptEval(RESPSocketClient* client, const char* script, int numKeys = 0,int nNumArgs = 0);
+		bool SendKey(const char* key);
+		bool SendKey(const unsigned char* key,int nLen);
+		bool SendKey(const std::string& key);
+
+		bool SendArg(const char* key);
+		bool SendArg(const unsigned char* key, int nLen);
+		bool SendArg(const std::string& key);
+		bool Execute();
+
+	};
 	class TinyRedisClient :public RESPSocketClient
 	{
 	public:
 		TinyRedisClient(const char* addres, int port);
 		~TinyRedisClient();
 		//http://redisdoc.com/string/set.html
+		bool Set(const std::string& key, std::string& value);
 		bool Set(const char* key, const char* value);
 		bool Set(const unsigned char* key, int nKeyLen, const unsigned char* value, int nValueLen);
 		//http://redisdoc.com/database/del.html
 		bool Del(const unsigned char* key, int nKeyLen);
 		bool Del(const char* key);
+		bool Del(const std::string& key);
 		//http://redisdoc.com/database/exists.html
 		bool Exists(const unsigned char* key, int nKeyLen);
 		bool Exists(const char* key);
+		bool Exists(const std::string& key);
+
 		//http://redisdoc.com/string/get.html
+		bool Get(const std::string& key, RESPParser* result);
 		bool Get(const char* key, RESPParser* result);
 		bool Get(const unsigned char* key,int nKeyLen, RESPParser* result);
+
 		//http://redisdoc.com/database/scan.html
+		bool Scan(int cursor, RESPParser* result, const std::string& pattern, int nCount = -1);
 		bool Scan(int cursor, RESPParser* result, const char* pattern = NULL, int nCount  = -1);
 		bool Scan(int cursor, RESPParser* result, const unsigned char* pattern = NULL,int nPatternLen =-1, int nCount = -1);
+
+		//http://redisdoc.com/database/flushdb.html
+		bool FlushDB();
+
+		//使用Lua脚本批量删除
+		bool BatchDel(const std::string& pattern);
+		bool BatchDel(const char* pattern);
+		bool BatchDel(const unsigned char* pattern,int nLen);
+
 	};
+
 }

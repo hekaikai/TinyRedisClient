@@ -75,6 +75,15 @@ int main()
 		std::sort(vec.begin(), vec.end());
 		std::cout << "total " << vec.size() << std::endl;
 	}
+	
+	if (client.BatchDel("a*"))
+	{
+		std::cout << "ok!\n";
+	}
+	if (!client.Exists("a10"))
+	{
+		std::cout << "ok!\n";
+	}
     std::cout << "Hello World!\n";
 }
 

@@ -213,6 +213,10 @@ bool RESPSocketClient::SendError(const char* error, int nLen)
     }
     return SendLine(RESPCommand::eError, (const unsigned char*)error, nLen);
 }
+bool RESPSocketClient::SendSimpleString(const std::string& str)
+{
+    return SendSimpleString(str.data(), str.size());
+}
 bool RESPSocketClient::SendSimpleString(const char* str, int nLen)
 {
     if (nLen < 0)
@@ -237,6 +241,10 @@ bool RESPSocketClient::SendBulkString(const  char* data, int nLen)
             nLen = strlen(data);
     }
     return SendBulkString((const unsigned char*)data, nLen);
+}
+bool RESPSocketClient::SendBulkString(const std::string& data)
+{
+    return SendBulkString((const unsigned char*)data.data(), data.size());
 }
 bool RESPSocketClient::SendBulkString(const unsigned char* data, int nLen)
 {
@@ -475,6 +483,45 @@ Reply& Reply::Swap(Reply& r)
     Children.swap(r.Children);
     return *this;
 }
+ScriptEval::ScriptEval(RESPSocketClient* client, const char* script, int numKeys, int nNumArgs)
+{
+    m_client = client;
+    
+    m_client->SendArray(3 + numKeys + nNumArgs);
+    m_client->SendBulkString("EVAL", 4);
+    m_client->SendBulkString(script);
+    m_client->SendBulkString(std::to_string(numKeys));
+}
+bool ScriptEval::SendKey(const char* key)
+{
+    return m_client->SendBulkString(key);
+}
+bool ScriptEval::SendKey(const unsigned char* key, int nLen)
+{
+    return m_client->SendBulkString(key,nLen);
+}
+bool ScriptEval::SendKey(const std::string& key)
+{
+    return m_client->SendBulkString(key);
+}
+
+bool ScriptEval::SendArg(const char* key)
+{
+    return m_client->SendBulkString(key);
+}
+bool ScriptEval::SendArg(const unsigned char* key, int nLen)
+{
+    return m_client->SendBulkString(key, nLen);
+}
+bool ScriptEval::SendArg(const std::string& key)
+{
+    return m_client->SendBulkString(key);
+}
+bool ScriptEval::Execute()
+{
+    return Parse(m_client);
+}
+
 TinyRedisClient::TinyRedisClient(const char* addres, int port):RESPSocketClient(addres,port)
 {
 
@@ -482,6 +529,11 @@ TinyRedisClient::TinyRedisClient(const char* addres, int port):RESPSocketClient(
 TinyRedisClient::~TinyRedisClient()
 {
 
+}
+bool TinyRedisClient::Set(const std::string& key, std::string& value)
+{
+    return Set((const unsigned char*)key.data(), key.size(),
+        (const unsigned char*)value.data(), value.size());
 }
 bool TinyRedisClient::Set(const char* key, const char* value)
 {
@@ -504,6 +556,10 @@ bool TinyRedisClient::Set(const unsigned char* key, int nKeyLen, const unsigned 
     if (ret.Type == RESPCommand::eSimpleString)
         return strcasecmp(ret.Content.c_str(), "OK") == 0;
     return false;
+}
+bool TinyRedisClient::Del(const std::string& key)
+{
+    return Del((const unsigned char*)key.data(), key.size());
 }
 bool TinyRedisClient::Del(const char* key)
 {
@@ -539,9 +595,17 @@ bool TinyRedisClient::Exists(const unsigned char* key, int nKeyLen)
         return ret.Integer() == 1;
     return false;
 }
+bool TinyRedisClient::Exists(const std::string& key)
+{
+    return Exists((const unsigned char*)key.data(), key.size());
+}
 bool TinyRedisClient::Exists(const char* key)
 {
     return Exists((const unsigned char*)key, key ? strlen(key) : 0);
+}
+bool TinyRedisClient::Get(const std::string& key, RESPParser* result)
+{
+    return Get((const unsigned char*)key.data(), key.size(), result);
 }
 bool TinyRedisClient::Get(const char* key, RESPParser* result)
 {
@@ -553,6 +617,10 @@ bool TinyRedisClient::Get(const unsigned char* key, int nKeyLen, RESPParser* res
     if (!SendBulkString("GET", 3)) return false;
     if (!SendBulkString(key, nKeyLen)) return false;
     return result->Parse(this);
+}
+bool TinyRedisClient::Scan(int cursor, RESPParser* result, const std::string& pattern, int nCount)
+{
+    return Scan(cursor, result, (const unsigned char*)pattern.data(), pattern.size());
 }
 bool TinyRedisClient::Scan(int cursor, RESPParser* result, const char* pattern, int nCount)
 {
@@ -584,5 +652,34 @@ bool TinyRedisClient::Scan(int cursor, RESPParser* result, const unsigned char* 
     return result->Parse(this);
 }
 
+bool TinyRedisClient::FlushDB()
+{
+    if(!SendArray(1)) return false;
+    if (!SendBulkString("FLUSHDB", 7)) return false;
+    ReplyParser reply;
+    return reply.Parse(this);
+}
+//使用Lua脚本批量删除
+bool TinyRedisClient::BatchDel(const std::string& pattern)
+{
+    return BatchDel((const unsigned char*)pattern.data(), pattern.size());
+}
+bool TinyRedisClient::BatchDel(const char* pattern)
+{
+    return BatchDel((const unsigned char*)pattern, pattern?strlen(pattern):0);
+}
+bool TinyRedisClient::BatchDel(const unsigned char* pattern, int nLen)
+{
+    //如果没有给条件则删除全部的数据。
+    if (!pattern || nLen <= 0)
+        return FlushDB();
+
+    static std::string script = "return redis.call('del',unpack(redis.call('keys',KEYS[1])))";
+    ScriptEval del(this, script.c_str(), 1);
+    del.SendKey(pattern, nLen);
+    if (!del.Execute())
+        return false;
+    return true;
+}
 
 
