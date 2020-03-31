@@ -168,6 +168,10 @@ namespace TRC
 	public:
 		TinyRedisClient(const char* addres, int port);
 		~TinyRedisClient();
+		
+		//http://redisdoc.com/database/select.html
+		bool Select(int i);
+
 		//http://redisdoc.com/string/set.html
 		bool Set(const std::string& key, std::string& value);
 		bool Set(const char* key, const char* value);

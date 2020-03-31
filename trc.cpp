@@ -530,6 +530,20 @@ TinyRedisClient::~TinyRedisClient()
 {
 
 }
+bool TinyRedisClient::Select(int i)
+{
+    if (!SendArray(2)) return false;
+    if (!SendBulkString("SELECT", 6)) return false;
+    if (!SendBulkString(std::to_string(i))) return false;
+
+    ReplyParser ret(this);
+    if (!ret)
+        return false;
+
+    if (ret.Type == RESPCommand::eSimpleString)
+        return strcasecmp(ret.Content.c_str(), "OK") == 0;
+    return false;
+}
 bool TinyRedisClient::Set(const std::string& key, std::string& value)
 {
     return Set((const unsigned char*)key.data(), key.size(),
