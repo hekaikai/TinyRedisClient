@@ -147,10 +147,12 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="tfc.cpp" />
     <ClCompile Include="TinyRedisClient.cpp" />
     <ClCompile Include="trc.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="tfc.h" />
     <ClInclude Include="trc.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

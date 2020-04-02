@@ -21,9 +21,15 @@
     <ClCompile Include="trc.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="tfc.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="trc.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="tfc.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>
