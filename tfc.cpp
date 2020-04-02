@@ -167,15 +167,15 @@ StorageInfo TrackerServer::QueryStorageStore()
 
 	return info;
 }
-FileNameInfo::operator bool()const
+FileFullName::operator bool()const
 {
 	return Content.size() > static_cast<int>(PacketSize::eFDFS_GROUP_NAME_MAX_LEN);
 }
-const char* FileNameInfo::GroupName()const
+const char* FileFullName::GroupName()const
 {
 	return Content.c_str();
 }
-const char* FileNameInfo::FileName()const
+const char* FileFullName::FileName()const
 {
 	if (Content.size() < static_cast<int>(PacketSize::eFDFS_GROUP_NAME_MAX_LEN))
 		return NULL;
@@ -186,9 +186,9 @@ StorageServer::StorageServer(const char* address, int port) :TinySocketClient(ad
 	Connect();
 }
 //上传文件，返回文件的的名称
-struct FileNameInfo StorageServer::Upload(const unsigned char* fileContent, int nLen, const char* ext)
+struct FileFullName StorageServer::Upload(const unsigned char* fileContent, int nLen, const char* ext)
 {
-	struct FileNameInfo name;
+	struct FileFullName name;
 	UploadFileHeader upload;
 	upload.byCmd = Command::eSTORAGE_PROTO_CMD_UPLOAD_FILE;
 	upload.FileExtension(ext);
@@ -319,9 +319,9 @@ StorageServerPtr FastClient::OpenStorage(const StorageInfo& info)
 	return ptr;
 }
 //上传文件，返回文件的的名称
-struct FileNameInfo FastClient::Upload(const unsigned char* fileContent, int nLen,const char* ext)
+struct FileFullName FastClient::Upload(const unsigned char* fileContent, int nLen,const char* ext)
 {
-	FileNameInfo name;
+	FileFullName name;
 	auto info = m_ptrTrackerServer->QueryStorageStore();
 	if (!info)
 		return name;
@@ -342,7 +342,7 @@ bool FastClient::Download(const char* group, const char* fileName,
 	return ptrStorage->Download(group,fileName,cb);
 }
 
-bool FastClient::Download(FileNameInfo& info,
+bool FastClient::Download(FileFullName& info,
 	const std::function<unsigned char* (int nLen)>& cb)
 {
 	if (!info || !cb)
@@ -350,7 +350,7 @@ bool FastClient::Download(FileNameInfo& info,
 	return Download(info.GroupName(),info.FileName(),cb);
 }
 //删除文件
-bool FastClient::Delete(FileNameInfo& info)
+bool FastClient::Delete(FileFullName& info)
 {
 	if (!info)
 		return false;

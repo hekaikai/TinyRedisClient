@@ -110,19 +110,21 @@ namespace TFC
 		StorageInfo QueryStorageStore();
 	};
 	typedef std::shared_ptr<TrackerServer> TrackerServerPtr;
-	struct FileNameInfo
+	
+	struct FileFullName
 	{
 		std::string Content;
 		const char* GroupName()const;
 		const char* FileName()const;
 		operator bool()const;
 	};
+
 	class StorageServer :public  TRC::TinySocketClient
 	{
 	public:
 		StorageServer(const char* address, int port);
 		//上传文件，返回文件的的名称
-		FileNameInfo Upload(const unsigned char* fileContent, int nLen, const char* ext);
+		FileFullName Upload(const unsigned char* fileContent, int nLen, const char* ext);
 
 		//下载文件
 		bool Download(const char* group, const char* fileName,
@@ -144,14 +146,14 @@ namespace TFC
 		FastClient(const char* address, int port);
 		bool Good()const;
 		//上传文件，返回文件的的名称
-		FileNameInfo Upload(const unsigned char* fileContent, int nLen, const char* ext);
+		FileFullName Upload(const unsigned char* fileContent, int nLen, const char* ext);
 		bool Download(const char* group, const char* fileName,
 			const std::function<unsigned char* (int nLen)>& cb);
 		//下载文件
-		bool Download(FileNameInfo& info,
+		bool Download(FileFullName& info,
 			const std::function<unsigned char* (int nLen)>& cb);
 		//删除文件
-		bool Delete(FileNameInfo& info);
+		bool Delete(FileFullName& info);
 		//删除文件
 		bool Delete(const char* group, const char* fileName);
 	};
