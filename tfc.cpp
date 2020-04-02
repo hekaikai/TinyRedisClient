@@ -100,7 +100,7 @@ StorageInfo::StorageInfo(const StorageInfo& r)
 {
 	memcpy(Packet, r.Packet, sizeof(Packet));
 }
-StorageInfo::StorageInfo(StorageInfo& rr)
+StorageInfo::StorageInfo(StorageInfo&& rr)
 {
 	Swap(rr);
 }

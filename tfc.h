@@ -92,7 +92,7 @@ namespace TFC
 			static_cast<int>(PacketSize::eFDFS_PROTO_PKG_LEN_SIZE)];
 		StorageInfo(); 
 		StorageInfo(const StorageInfo& r);
-		StorageInfo(StorageInfo& rr);
+		StorageInfo(StorageInfo&& rr);
 		StorageInfo& operator =(const StorageInfo& r);
 		StorageInfo& operator =(StorageInfo&& r);
 		void Swap(StorageInfo& r);
